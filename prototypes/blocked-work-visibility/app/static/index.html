@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blocked Work Visibility</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --success: #10b981;
+            --border: #e2e8f0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 { margin: 0; font-size: 1.875rem; font-weight: 700; }
+
+        .card {
+            background: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
+        input, textarea, select {
+            width: 100%;
+            padding: 0.625rem;
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            padding: 0.625rem 1.25rem;
+            border: none;
+            border-radius: 0.375rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        button:hover { opacity: 0.9; }
+
+        .item-list { display: flex; flex-direction: column; gap: 1rem; }
+        .item {
+            background: var(--card-bg);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+            position: relative;
+        }
+
+        .item.overdue { border-left: 4px solid var(--danger); }
+        .item.stale { border-left: 4px solid var(--warning); }
+
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.5rem;
+        }
+
+        .item-header h3 { margin: 0; font-size: 1.125rem; }
+        
+        .meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-bottom: 0.5rem;
+        }
+
+        .badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .status-blocked { background: #fee2e2; color: var(--danger); }
+        .status-resolved { background: #d1fae5; color: var(--success); }
+
+        .notes {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px dashed var(--border);
+            font-size: 0.875rem;
+        }
+        .note { margin-bottom: 0.5rem; }
+        .note-time { color: #94a3b8; font-size: 0.75rem; }
+
+        .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
+        .actions input { flex: 1; padding: 0.4rem; }
+        .actions button { padding: 0.4rem 0.8rem; font-size: 0.875rem; }
+        .btn-resolve { background-color: var(--success); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Blocked Work Visibility</h1>
+        </header>
+
+        <div class="card">
+            <h2>Log New Blocker</h2>
+            <form id="item-form">
+                <div class="form-group">
+                    <label for="description">Description</label>
+                    <input type="text" id="description" required placeholder="What is blocked?">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
+                        <label for="waiting_on">Waiting On</label>
+                        <input type="text" id="waiting_on" required placeholder="Person, team, or resource">
+                    </div>
+                    <div class="form-group">
+                        <label for="owner">Internal Owner</label>
+                        <input type="text" id="owner" required placeholder="Who is tracking this?">
+                    </div>
+                </div>
+                <button type="submit">Log Blocker</button>
+            </form>
+        </div>
+
+        <h2>Current Blockers</h2>
+        <div id="item-list" class="item-list"></div>
+    </div>
+
+    <script>
+        const API_URL = '/api/blocked';
+
+        async function fetchItems() {
+            const res = await fetch(API_URL);
+            const items = await res.json();
+            const list = document.getElementById('item-list');
+            list.innerHTML = '';
+            
+            items.reverse().forEach(item => {
+                const div = document.createElement('div');
+                div.className = `item ${item.is_overdue ? 'overdue' : ''} ${item.is_stale ? 'stale' : ''}`;
+                
+                const notesHtml = item.update_notes.map(n => `
+                    <div class="note">
+                        <span class="note-time">${new Date(n.timestamp).toLocaleString()}</span>: ${n.text}
+                    </div>
+                `).join('');
+
+                div.innerHTML = `
+                    <div class="item-header">
+                        <h3>${item.description}</h3>
+                        <span class="badge status-${item.status}">${item.status}</span>
+                    </div>
+                    <div class="meta">
+                        <span><strong>Waiting on:</strong> ${item.waiting_on}</span>
+                        <span><strong>Owner:</strong> ${item.owner}</span>
+                        <span><strong>Age:</strong> ${item.age_display}</span>
+                    </div>
+                    ${notesHtml ? `<div class="notes">${notesHtml}</div>` : ''}
+                    
+                    ${item.status === 'blocked' ? `
+                        <div class="actions">
+                            <input type="text" id="note-${item.id}" placeholder="Add an update...">
+                            <button onclick="addUpdate('${item.id}')">Update</button>
+                            <button class="btn-resolve" onclick="resolveItem('${item.id}')">Resolve</button>
+                        </div>
+                    ` : ''}
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function addUpdate(id) {
+            const noteInput = document.getElementById(`note-${id}`);
+            const note = noteInput.value;
+            if (!note) return;
+
+            await fetch(`${API_URL}/${id}/updates`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ note })
+            });
+            fetchItems();
+        }
+
+        async function resolveItem(id) {
+            const reason = prompt("Resolution reason?");
+            if (reason === null) return;
+
+            await fetch(`${API_URL}/${id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'resolved', reason: reason || 'Resolved by user' })
+            });
+            fetchItems();
+        }
+
+        document.getElementById('item-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const description = document.getElementById('description').value;
+            const waiting_on = document.getElementById('waiting_on').value;
+            const owner = document.getElementById('owner').value;
+
+            await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description, waiting_on, owner })
+            });
+
+            document.getElementById('item-form').reset();
+            fetchItems();
+        };
+
+        fetchItems();
+    </script>
+</body>
+</html>
