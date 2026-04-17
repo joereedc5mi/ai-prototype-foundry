@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timezone
 from enum import Enum
+from contextlib import asynccontextmanager
 from typing import List, Optional
 from uuid import UUID, uuid4
 
@@ -147,11 +148,12 @@ class BlockedItemRead(BaseModel):
 
 # --- App ---
 
-app = FastAPI(title="Blocked Work Visibility")
-
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     create_db_and_tables()
+    yield
+
+app = FastAPI(title="Blocked Work Visibility", lifespan=lifespan)
 
 # --- API Routes ---
 
