@@ -11,14 +11,22 @@ from pydantic import BaseModel, Field
 from sqlmodel import SQLModel, Field as SQLField, create_engine, Session, select, Relationship
 
 # --- Database ---
-sqlite_file_name = "data/database.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
+DB_MODE = os.getenv("DB_MODE", "persistent") # "persistent" or "memory"
+
+if DB_MODE == "memory":
+    sqlite_url = "sqlite://" # In-memory SQLite
+    print("Running in MEMORY mode (Data will be lost on exit)")
+else:
+    sqlite_file_name = "data/database.db"
+    sqlite_url = f"sqlite:///{sqlite_file_name}"
+    print(f"Running in PERSISTENT mode (Data saved to {sqlite_file_name})")
 
 connect_args = {"check_same_thread": False}
 engine = create_engine(sqlite_url, connect_args=connect_args)
 
 def create_db_and_tables():
-    os.makedirs("data", exist_ok=True)
+    if DB_MODE == "persistent":
+        os.makedirs("data", exist_ok=True)
     SQLModel.metadata.create_all(engine)
 
 def get_session():

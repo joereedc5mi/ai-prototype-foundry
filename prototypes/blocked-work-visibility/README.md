@@ -53,6 +53,20 @@ Build and run the entire stack with one command:
 docker-compose up --build
 ```
 
+### Database & Persistence
+
+The application supports two database modes via the `DB_MODE` environment variable:
+
+1.  **Persistent (Default)**: Uses a SQLite file at `app/data/database.db`. In Docker, this is mapped to a local `data` directory via volumes, so data is preserved between restarts.
+2.  **In-Memory**: Set `DB_MODE=memory` to run entirely in RAM. Data is lost as soon as the application stops. Useful for testing or ephemeral demos.
+
+**Toggle Mode in Docker**:
+Edit `docker-compose.yml`:
+```yaml
+environment:
+  - DB_MODE=memory
+```
+
 ## Testing
 
 ### Backend Tests
