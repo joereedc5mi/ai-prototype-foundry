@@ -1,10 +1,11 @@
 services:
   blocked-work-app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
-      - ./data:/app/data
+      - ./app/data:/app/data
     environment:
       - APP_ENV=local
