@@ -1,25 +1,28 @@
 import os
-import json
 from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field
+from sqlmodel import SQLModel, Field as SQLField, create_engine, Session, select, Relationship
 
-app = FastAPI(title="Blocked Work Visibility")
+# --- Database ---
+sqlite_file_name = "data/database.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
 
-# --- Persistence ---
-DATA_FILE = "data/items.json"
+connect_args = {"check_same_thread": False}
+engine = create_engine(sqlite_url, connect_args=connect_args)
 
-def save_to_disk():
+def create_db_and_tables():
     os.makedirs("data", exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        # Convert UUIDs and Datetimes to strings for JSON
-        json_data = [item.model_dump(mode='json') for item in items]
-        json.dump(json_data, f)
+    SQLModel.metadata.create_all(engine)
+
+def get_session():
+    with Session(engine) as session:
+        yield session
 
 # --- Models ---
 
@@ -28,39 +31,55 @@ class Status(str, Enum):
     IN_PROGRESS = "in_progress"
     RESOLVED = "resolved"
 
-class UpdateNote(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+class UpdateNote(SQLModel, table=True):
+    id: Optional[int] = SQLField(default=None, primary_key=True)
+    timestamp: datetime = SQLField(default_factory=lambda: datetime.now(timezone.utc))
     text: str
+    item_id: UUID = SQLField(foreign_key="blockeditem.id")
+    item: "BlockedItem" = Relationship(back_populates="update_notes")
 
-class BlockedItem(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
+class BlockedItem(SQLModel, table=True):
+    id: UUID = SQLField(default_factory=uuid4, primary_key=True)
     title: str
     description: str
     waiting_on: str
     owner: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    status: Status = Status.BLOCKED
-    resolved_at: Optional[datetime] = None
-    warning_threshold_days: int = 3
-    last_updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    update_notes: List[UpdateNote] = Field(default_factory=list)
+    created_at: datetime = SQLField(default_factory=lambda: datetime.now(timezone.utc))
+    status: str = SQLField(default=Status.BLOCKED)
+    resolved_at: Optional[datetime] = SQLField(default=None)
+    warning_threshold_days: int = SQLField(default=3)
+    last_updated_at: datetime = SQLField(default_factory=lambda: datetime.now(timezone.utc))
 
-    @computed_field
+    update_notes: List[UpdateNote] = Relationship(back_populates="item", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+
     @property
     def days_blocked(self) -> int:
+        created_at = self.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
         if self.status == Status.RESOLVED and self.resolved_at:
-            delta = self.resolved_at - self.created_at
+            resolved_at = self.resolved_at
+            if resolved_at.tzinfo is None:
+                resolved_at = resolved_at.replace(tzinfo=timezone.utc)
+            delta = resolved_at - created_at
         else:
-            delta = datetime.now(timezone.utc) - self.created_at
+            delta = datetime.now(timezone.utc) - created_at
         return delta.days
 
-    @computed_field
     @property
     def age_display(self) -> str:
+        created_at = self.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
         if self.status == Status.RESOLVED and self.resolved_at:
-            delta = self.resolved_at - self.created_at
+            resolved_at = self.resolved_at
+            if resolved_at.tzinfo is None:
+                resolved_at = resolved_at.replace(tzinfo=timezone.utc)
+            delta = resolved_at - created_at
         else:
-            delta = datetime.now(timezone.utc) - self.created_at
+            delta = datetime.now(timezone.utc) - created_at
             
         days = delta.days
         hours = delta.seconds // 3600
@@ -75,37 +94,21 @@ class BlockedItem(BaseModel):
         
         return ", ".join(parts)
 
-    @computed_field
-    @property
-    def days_since_update(self) -> int:
-        if self.status == Status.RESOLVED:
-            return 0
-        delta = datetime.now(timezone.utc) - self.last_updated_at
-        return delta.days
-
-    @computed_field
     @property
     def is_overdue(self) -> bool:
         if self.status == Status.RESOLVED:
             return False
         return self.days_blocked >= self.warning_threshold_days
 
-    @computed_field
     @property
     def is_stale(self) -> bool:
         if self.status in [Status.RESOLVED, Status.IN_PROGRESS]:
             return False
-        return self.days_since_update >= 2
-
-def load_from_disk():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                data = json.load(f)
-                return [BlockedItem(**item) for item in data]
-        except (json.JSONDecodeError, KeyError, ValueError):
-            return []
-    return []
+        last_updated_at = self.last_updated_at
+        if last_updated_at.tzinfo is None:
+            last_updated_at = last_updated_at.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - last_updated_at
+        return delta.days >= 2
 
 class BlockedItemCreate(BaseModel):
     title: str
@@ -121,16 +124,34 @@ class BlockedItemStatusUpdate(BaseModel):
     status: Status
     reason: str
 
-class BlockedItemResponse(BlockedItem):
-    model_config = {
-        "from_attributes": True
-    }
+class UpdateNoteRead(BaseModel):
+    timestamp: datetime
+    text: str
 
-# --- In-memory storage ---
-items: List[BlockedItem] = load_from_disk()
+class BlockedItemRead(BaseModel):
+    id: UUID
+    title: str
+    description: str
+    waiting_on: str
+    owner: str
+    created_at: datetime
+    status: Status
+    resolved_at: Optional[datetime]
+    warning_threshold_days: int
+    last_updated_at: datetime
+    update_notes: List[UpdateNoteRead]
+    days_blocked: int
+    age_display: str
+    is_overdue: bool
+    is_stale: bool
 
-def make_response(item: BlockedItem) -> BlockedItemResponse:
-    return BlockedItemResponse.model_validate(item)
+# --- App ---
+
+app = FastAPI(title="Blocked Work Visibility")
+
+@app.on_event("startup")
+def on_startup():
+    create_db_and_tables()
 
 # --- API Routes ---
 
@@ -142,60 +163,78 @@ def health():
         "app": "online",
     }
 
-@app.post("/api/blocked", response_model=BlockedItemResponse)
-def create_item(item_in: BlockedItemCreate, background_tasks: BackgroundTasks):
+@app.post("/api/blocked", response_model=BlockedItemRead)
+def create_item(item_in: BlockedItemCreate, session: Session = Depends(get_session)):
     new_item = BlockedItem(**item_in.model_dump())
-    items.append(new_item)
-    background_tasks.add_task(save_to_disk)
-    return make_response(new_item)
+    session.add(new_item)
+    session.commit()
+    session.refresh(new_item)
+    return new_item
 
-@app.get("/api/blocked", response_model=List[BlockedItemResponse])
-def get_items():
-    return [make_response(item) for item in items]
+@app.get("/api/blocked", response_model=List[BlockedItemRead])
+def get_items(session: Session = Depends(get_session)):
+    items = session.exec(select(BlockedItem)).all()
+    return items
 
-@app.post("/api/blocked/{item_id}/updates", response_model=BlockedItemResponse)
-def add_update(item_id: UUID, update_in: BlockedItemUpdate, background_tasks: BackgroundTasks):
-    for item in items:
-        if item.id == item_id:
-            if item.status == Status.RESOLVED:
-                raise HTTPException(status_code=400, detail="Cannot update resolved item")
-            item.update_notes.append(UpdateNote(text=update_in.note))
-            item.last_updated_at = datetime.now(timezone.utc)
-            background_tasks.add_task(save_to_disk)
-            return make_response(item)
-    raise HTTPException(status_code=404, detail="Item not found")
+@app.post("/api/blocked/{item_id}/updates", response_model=BlockedItemRead)
+def add_update(item_id: UUID, update_in: BlockedItemUpdate, session: Session = Depends(get_session)):
+    item = session.get(BlockedItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.status == Status.RESOLVED:
+        raise HTTPException(status_code=400, detail="Cannot update resolved item")
 
-@app.patch("/api/blocked/{item_id}", response_model=BlockedItemResponse)
-def update_item_status(item_id: UUID, update_in: BlockedItemStatusUpdate, background_tasks: BackgroundTasks):
-    for item in items:
-        if item.id == item_id:
-            if item.status == update_in.status:
-                raise HTTPException(status_code=400, detail=f"Item already {update_in.status.value}")
-            
-            item.status = update_in.status
-            item.last_updated_at = datetime.now(timezone.utc)
-            
-            if update_in.status == Status.RESOLVED:
-                item.resolved_at = datetime.now(timezone.utc)
-                item.update_notes.append(UpdateNote(text=f"Resolved: {update_in.reason}"))
-            elif update_in.status == Status.BLOCKED:
-                item.resolved_at = None
-                item.update_notes.append(UpdateNote(text=f"Re-blocked: {update_in.reason}"))
-            elif update_in.status == Status.IN_PROGRESS:
-                item.resolved_at = None
-                item.update_notes.append(UpdateNote(text=f"In Progress: {update_in.reason}"))
-                
-            background_tasks.add_task(save_to_disk)
-            return make_response(item)
-    raise HTTPException(status_code=404, detail="Item not found")
+    note = UpdateNote(text=update_in.note, item_id=item_id)
+    item.update_notes.append(note)
+    item.last_updated_at = datetime.now(timezone.utc)
+
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item
+
+@app.patch("/api/blocked/{item_id}", response_model=BlockedItemRead)
+def update_item_status(item_id: UUID, update_in: BlockedItemStatusUpdate, session: Session = Depends(get_session)):
+    item = session.get(BlockedItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.status == update_in.status:
+        raise HTTPException(status_code=400, detail=f"Item already {update_in.status.value}")
+
+    item.status = update_in.status
+    item.last_updated_at = datetime.now(timezone.utc)
+
+    if update_in.status == Status.RESOLVED:
+        item.resolved_at = datetime.now(timezone.utc)
+        note_text = f"Resolved: {update_in.reason}"
+    elif update_in.status == Status.BLOCKED:
+        item.resolved_at = None
+        note_text = f"Re-blocked: {update_in.reason}"
+    elif update_in.status == Status.IN_PROGRESS:
+        item.resolved_at = None
+        note_text = f"In Progress: {update_in.reason}"
+
+    note = UpdateNote(text=note_text, item_id=item_id)
+    item.update_notes.append(note)
+
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item
 
 # --- Static File Serving ---
-# Mount this LAST so it doesn't override /api or /health routes
-static_path = "../frontend/dist"
+# Try to find the React build first, then fall back to the static folder
+base_dir = os.path.dirname(os.path.abspath(__file__))
+static_path = os.path.join(base_dir, "frontend/dist") # For Docker multi-stage
 if not os.path.exists(static_path):
-    # Fallback to local static if dist doesn't exist yet (for dev)
-    static_path = "static"
+    static_path = os.path.join(base_dir, "../frontend/dist") # For local dev
+if not os.path.exists(static_path):
+    static_path = os.path.join(base_dir, "static")
     if not os.path.exists(static_path):
         os.makedirs(static_path)
 
 app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
