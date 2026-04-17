@@ -110,6 +110,7 @@
         }
 
         .status-blocked { background: #fee2e2; color: var(--danger); }
+        .status-in_progress { background: #fef3c7; color: var(--warning); }
         .status-resolved { background: #d1fae5; color: var(--success); }
 
         .notes {
@@ -125,6 +126,49 @@
         .actions input { flex: 1; padding: 0.4rem; }
         .actions button { padding: 0.4rem 0.8rem; font-size: 0.875rem; }
         .btn-resolve { background-color: var(--success); }
+        .btn-in-progress { background-color: var(--warning); }
+        .btn-block { background-color: var(--danger); }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: #64748b;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            gap: 1rem;
+        }
+
+        .controls select {
+            width: auto;
+            padding: 0.4rem;
+        }
     </style>
 </head>
 <body>
@@ -133,12 +177,35 @@
             <h1>Blocked Work Visibility</h1>
         </header>
 
+        <div id="dashboard" class="dashboard">
+            <div class="stat-card">
+                <span id="stat-total" class="stat-value">0</span>
+                <span class="stat-label">Total</span>
+            </div>
+            <div class="stat-card">
+                <span id="stat-blocked" class="stat-value">0</span>
+                <span class="stat-label" style="color: var(--danger)">Blocked</span>
+            </div>
+            <div class="stat-card">
+                <span id="stat-in-progress" class="stat-value">0</span>
+                <span class="stat-label" style="color: var(--warning)">In Progress</span>
+            </div>
+            <div class="stat-card">
+                <span id="stat-resolved" class="stat-value">0</span>
+                <span class="stat-label" style="color: var(--success)">Resolved</span>
+            </div>
+        </div>
+
         <div class="card">
             <h2>Log New Blocker</h2>
             <form id="item-form">
                 <div class="form-group">
+                    <label for="title">Title</label>
+                    <input type="text" id="title" required placeholder="Brief title of the blocker">
+                </div>
+                <div class="form-group">
                     <label for="description">Description</label>
-                    <input type="text" id="description" required placeholder="What is blocked?">
+                    <textarea id="description" required placeholder="Detailed description of what is blocked..."></textarea>
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                     <div class="form-group">
@@ -154,20 +221,56 @@
             </form>
         </div>
 
-        <h2>Current Blockers</h2>
+        <div class="controls">
+            <h2>Current Blockers</h2>
+            <div style="display: flex; gap: 1rem;">
+                <select id="filter-status" onchange="renderItems()">
+                    <option value="all">All Statuses</option>
+                    <option value="blocked">Blocked</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="resolved">Resolved</option>
+                </select>
+                <select id="sort-by" onchange="renderItems()">
+                    <option value="created_at_desc">Newest First</option>
+                    <option value="created_at_asc">Oldest First</option>
+                    <option value="days_blocked_desc">Longest Blocked</option>
+                </select>
+            </div>
+        </div>
         <div id="item-list" class="item-list"></div>
     </div>
 
     <script>
         const API_URL = '/api/blocked';
+        let allItems = [];
 
         async function fetchItems() {
             const res = await fetch(API_URL);
-            const items = await res.json();
+            allItems = await res.json();
+            updateDashboard(allItems);
+            renderItems();
+        }
+
+        function renderItems() {
+            const statusFilter = document.getElementById('filter-status').value;
+            const sortBy = document.getElementById('sort-by').value;
+
+            let filteredItems = [...allItems];
+            if (statusFilter !== 'all') {
+                filteredItems = filteredItems.filter(i => i.status === statusFilter);
+            }
+
+            filteredItems.sort((a, b) => {
+                if (sortBy === 'created_at_desc') return new Date(b.created_at) - new Date(a.created_at);
+                if (sortBy === 'created_at_asc') return new Date(a.created_at) - new Date(b.created_at);
+                if (sortBy === 'days_blocked_desc') return b.days_blocked - a.days_blocked;
+                return 0;
+            });
+
             const list = document.getElementById('item-list');
             list.innerHTML = '';
             
-            items.reverse().forEach(item => {
+            filteredItems.forEach(item => {
                 const div = document.createElement('div');
                 div.className = `item ${item.is_overdue ? 'overdue' : ''} ${item.is_stale ? 'stale' : ''}`;
                 
@@ -179,8 +282,11 @@
 
                 div.innerHTML = `
                     <div class="item-header">
-                        <h3>${item.description}</h3>
-                        <span class="badge status-${item.status}">${item.status}</span>
+                        <h3>${item.title}</h3>
+                        <span class="badge status-${item.status}">${item.status.replace('_', ' ')}</span>
+                    </div>
+                    <div class="meta">
+                        <p>${item.description}</p>
                     </div>
                     <div class="meta">
                         <span><strong>Waiting on:</strong> ${item.waiting_on}</span>
@@ -189,11 +295,13 @@
                     </div>
                     ${notesHtml ? `<div class="notes">${notesHtml}</div>` : ''}
                     
-                    ${item.status === 'blocked' ? `
+                    ${item.status !== 'resolved' ? `
                         <div class="actions">
                             <input type="text" id="note-${item.id}" placeholder="Add an update...">
                             <button onclick="addUpdate('${item.id}')">Update</button>
-                            <button class="btn-resolve" onclick="resolveItem('${item.id}')">Resolve</button>
+                            ${item.status === 'blocked' ? `<button class="btn-in-progress" onclick="updateStatus('${item.id}', 'in_progress')">In Progress</button>` : ''}
+                            ${item.status === 'in_progress' ? `<button class="btn-block" onclick="updateStatus('${item.id}', 'blocked')">Block</button>` : ''}
+                            <button class="btn-resolve" onclick="updateStatus('${item.id}', 'resolved')">Resolve</button>
                         </div>
                     ` : ''}
                 `;
@@ -214,20 +322,35 @@
             fetchItems();
         }
 
-        async function resolveItem(id) {
-            const reason = prompt("Resolution reason?");
+        function updateDashboard(items) {
+            const stats = {
+                total: items.length,
+                blocked: items.filter(i => i.status === 'blocked').length,
+                in_progress: items.filter(i => i.status === 'in_progress').length,
+                resolved: items.filter(i => i.status === 'resolved').length
+            };
+
+            document.getElementById('stat-total').textContent = stats.total;
+            document.getElementById('stat-blocked').textContent = stats.blocked;
+            document.getElementById('stat-in-progress').textContent = stats.in_progress;
+            document.getElementById('stat-resolved').textContent = stats.resolved;
+        }
+
+        async function updateStatus(id, status) {
+            const reason = prompt(`Reason for moving to ${status.replace('_', ' ')}?`);
             if (reason === null) return;
 
             await fetch(`${API_URL}/${id}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: 'resolved', reason: reason || 'Resolved by user' })
+                body: JSON.stringify({ status: status, reason: reason || `Moved to ${status}` })
             });
             fetchItems();
         }
 
         document.getElementById('item-form').onsubmit = async (e) => {
             e.preventDefault();
+            const title = document.getElementById('title').value;
             const description = document.getElementById('description').value;
             const waiting_on = document.getElementById('waiting_on').value;
             const owner = document.getElementById('owner').value;
@@ -235,7 +358,7 @@
             await fetch(API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description, waiting_on, owner })
+                body: JSON.stringify({ title, description, waiting_on, owner })
             });
 
             document.getElementById('item-form').reset();

@@ -25,6 +25,7 @@ def save_to_disk():
 
 class Status(str, Enum):
     BLOCKED = "blocked"
+    IN_PROGRESS = "in_progress"
     RESOLVED = "resolved"
 
 class UpdateNote(BaseModel):
@@ -33,6 +34,7 @@ class UpdateNote(BaseModel):
 
 class BlockedItem(BaseModel):
     id: UUID = Field(default_factory=uuid4)
+    title: str
     description: str
     waiting_on: str
     owner: str
@@ -91,7 +93,7 @@ class BlockedItem(BaseModel):
     @computed_field
     @property
     def is_stale(self) -> bool:
-        if self.status == Status.RESOLVED:
+        if self.status in [Status.RESOLVED, Status.IN_PROGRESS]:
             return False
         return self.days_since_update >= 2
 
@@ -106,6 +108,7 @@ def load_from_disk():
     return []
 
 class BlockedItemCreate(BaseModel):
+    title: str
     description: str
     waiting_on: str
     owner: str
@@ -178,6 +181,9 @@ def update_item_status(item_id: UUID, update_in: BlockedItemStatusUpdate, backgr
             elif update_in.status == Status.BLOCKED:
                 item.resolved_at = None
                 item.update_notes.append(UpdateNote(text=f"Re-blocked: {update_in.reason}"))
+            elif update_in.status == Status.IN_PROGRESS:
+                item.resolved_at = None
+                item.update_notes.append(UpdateNote(text=f"In Progress: {update_in.reason}"))
                 
             background_tasks.add_task(save_to_disk)
             return make_response(item)
