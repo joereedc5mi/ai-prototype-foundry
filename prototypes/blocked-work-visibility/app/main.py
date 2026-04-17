@@ -191,8 +191,11 @@ def update_item_status(item_id: UUID, update_in: BlockedItemStatusUpdate, backgr
 
 # --- Static File Serving ---
 # Mount this LAST so it doesn't override /api or /health routes
-static_path = "static"
+static_path = "../frontend/dist"
 if not os.path.exists(static_path):
-    os.makedirs(static_path)
+    # Fallback to local static if dist doesn't exist yet (for dev)
+    static_path = "static"
+    if not os.path.exists(static_path):
+        os.makedirs(static_path)
 
 app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
