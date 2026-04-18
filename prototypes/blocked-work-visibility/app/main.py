@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlmodel import SQLModel, Field as SQLField, create_engine, Session, select, Relationship
+from sqlmodel import SQLModel, Field as SQLField, create_engine, Session, select, Relationship, StaticPool
 
 # --- Database ---
 DB_MODE = os.getenv("DB_MODE", "persistent") # "persistent" or "memory"
@@ -22,7 +22,11 @@ else:
     print(f"Running in PERSISTENT mode (Data saved to {sqlite_file_name})")
 
 connect_args = {"check_same_thread": False}
-engine = create_engine(sqlite_url, connect_args=connect_args)
+if DB_MODE == "memory":
+    # Use StaticPool for in-memory DB to share data across connections
+    engine = create_engine(sqlite_url, connect_args=connect_args, poolclass=StaticPool)
+else:
+    engine = create_engine(sqlite_url, connect_args=connect_args)
 
 def create_db_and_tables():
     if DB_MODE == "persistent":
